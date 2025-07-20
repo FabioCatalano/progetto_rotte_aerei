@@ -44,7 +44,9 @@ plot.addItem(city_scatter)
 connections = {city: [] for city in all_cities.keys()}
 
 pen_dashed = pg.mkPen(color = (80, 80, 80), width = 2, style = QtCore.Qt.DashLine)
-lines = []
+
+
+lines = {}  # (city_name, dest_city) : line -> {(tuple): linea}
 
 texts = []
 
@@ -55,6 +57,15 @@ for name, (x, y) in cities.items():
     text.setZValue(2)
     plot.addItem(text)
     texts.append(text)
+
+def connect_cities(c1, c2):
+    connections[c1].append(c2)
+    connections[c2].append(c1)
+
+def disconnect_cities(c1, c2):
+    connections[c1].remove(c2)
+    connections[c2].remove(c1)
+
 
 # Timer per aggiungere città ogni 10 secondi
 def add_city():
@@ -191,8 +202,7 @@ def on_city_clicked(scatter, points):
 
             end = cities[dest_city]
             
-            connections[city_name].append(dest_city)
-            connections[dest_city].append(city_name)
+            connect_cities(city_name, dest_city)
             print(connections)
             
             line = pg.PlotDataItem(
@@ -202,7 +212,9 @@ def on_city_clicked(scatter, points):
             )
             line.setZValue(0.5)
             plot.addItem(line)
-            lines.append(line)
+            key = tuple(sorted([city_name, dest_city]))
+            lines[key] = line
+
 
         elif choice == "Eliminare una linea di connessione":
             if len(connections[city_name]) == 0:
@@ -218,19 +230,19 @@ def on_city_clicked(scatter, points):
             if not ok:
                 return
             
-            connections[city_name].remove(dest_city)
-            connections[dest_city].remove(city_name)
+            disconnect_cities(city_name, dest_city)
             print(connections)
 
             # Rimuove la linea grafica
-            for line in lines:
-                line_x = line.getData()[0]
-                line_y = line.getData()[1]
-                line_coords = [(line_x[0], line_y[0]), (line_x[1], line_y[1])]
-                if (cities[city_name] in line_coords) and (cities[dest_city] in line_coords):
-                    plot.removeItem(line)
-                    lines.remove(line)
-                    break
+            key = tuple(sorted([city_name, dest_city]))
+            if key in lines:
+                plot.removeItem(lines[key])
+                del lines[key]
+                
+    if not animation_timer.isActive():
+        animation_timer.start()
+
+
 
 
 def animate():
@@ -264,10 +276,10 @@ def animate():
         t = anim['distance'] / anim['length'] if anim['length'] != 0 else 1
         new_pos = interpolate_points(anim['start'], anim['end'], t)
         anim['item'].setPos(*new_pos)
-
-
-    if len(active_planes) == 0:
-        animation_timer.stop()
+        
+        
+    # if len(active_planes) == 0:
+    #     animation_timer.stop()
 
 animation_timer.timeout.connect(animate)
 city_scatter.sigClicked.connect(on_city_clicked)
