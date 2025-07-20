@@ -14,32 +14,21 @@ win = pg.GraphicsLayoutWidget(show = True, title='Gioco aerei volanti')
 plot = win.addPlot()
 plot.setAspectLocked(True)
 
-cities = {
+# Lista di città “da aggiungere” (coordinate e nomi non ancora presenti)
+all_cities = {
     'A': (10, 20),
     'B': (50, 80),
     'C': (70, 40),
     'D': (90, 90),
-    'E': (10, 60)
+    'E': (30, 60),
+    'F': (80, 20),
+    'G': (60, 10),
+    'H': (40, 70)
 }
 
+# Iniziamo con alcune città (per esempio solo A, B, C)
+cities = {k: v for k, v in all_cities.items() if k in ['A', 'B', 'C']}
 city_positions = list(cities.values())
-
-# Inizializziamo connections senza collegamenti
-connections = {city: [] for city in cities.keys()}
-
-pen_dashed = pg.mkPen(color = (80, 80, 80), width = 2, style = QtCore.Qt.DashLine)
-lines = []
-
-# static_line = pg.PlotDataItem(
-#     x = [pos[0] for pos in city_positions] + [city_positions[0][0]],
-#     y = [pos[1] for pos in city_positions] + [city_positions[0][1]],
-#     pen = pen_dashed
-# )
-# static_line.setZValue(0)
-# plot.addItem(static_line)
-# lines.append(static_line)
-
-
 
 city_scatter = pg.ScatterPlotItem(
     pos = city_positions,
@@ -50,12 +39,55 @@ city_scatter = pg.ScatterPlotItem(
 city_scatter.setZValue(1)
 plot.addItem(city_scatter)
 
+
+# Inizializziamo connections senza collegamenti
+connections = {city: [] for city in all_cities.keys()}
+
+pen_dashed = pg.mkPen(color = (80, 80, 80), width = 2, style = QtCore.Qt.DashLine)
+lines = []
+
+texts = []
+
 #anchor posiziona rispetto a (x,y)
 for name, (x, y) in cities.items():
     text = pg.TextItem(name, anchor = (0.5, -0.5), color='black')
     text.setPos(x, y)
     text.setZValue(2)
     plot.addItem(text)
+    texts.append(text)
+
+# Timer per aggiungere città ogni 10 secondi
+def add_city():
+    global cities, city_positions, texts
+
+    # Trova città non ancora aggiunte
+    remaining = [k for k in all_cities.keys() if k not in cities]
+    if not remaining:
+        # Nessuna città rimasta, ferma timer
+        add_city_timer.stop()
+        return
+
+    # Prendi una città a caso o in ordine
+    new_city = remaining[0]
+    new_pos = all_cities[new_city]
+
+    # Aggiungi alla mappa
+    cities[new_city] = new_pos
+    city_positions = list(cities.values())
+
+    # Aggiorna scatter
+    city_scatter.setData(pos=city_positions)
+
+    # Aggiungi testo della nuova città
+    text = pg.TextItem(new_city, anchor=(0.5, -0.5), color='black')
+    text.setPos(*new_pos)
+    plot.addItem(text)
+    texts.append(text)
+
+add_city_timer = QtCore.QTimer()
+add_city_timer.timeout.connect(add_city)
+add_city_timer.start(10000)  # 10 secondi
+
 
 def create_airplane_svg_item(svg_path, starting_point, size = 5, angle = 0,):
     item = QtSvg.QGraphicsSvgItem(svg_path)
@@ -81,8 +113,8 @@ active_planes = []
 
 animation_timer = QtCore.QTimer()
 animation_timer.setInterval(30)
-
 animation_speed = 0.5
+
 
 def interpolate_points(p1, p2, t):
     return (1 - t) * np.array(p1) + t * np.array(p2)
@@ -117,8 +149,6 @@ def on_city_clicked(scatter, points):
         if not ok:
             return
 
-            
-
         start = city_positions[idx]
 
         if choice == "Far partire un aereo":
@@ -131,7 +161,7 @@ def on_city_clicked(scatter, points):
 
             plane = create_airplane_svg_item('airplane.svg', size=5, angle=angle, starting_point=start)
             plot.addItem(plane)
-
+            
             active_planes.append({
                 'item': plane,
                 'start': start,
@@ -139,8 +169,10 @@ def on_city_clicked(scatter, points):
                 'angle': angle,
                 'length': length,
                 'distance': 0,
+                'direction': 1,   # inizio volo in avanti
                 'base_scale': plane.scale()
             })
+
 
             if not animation_timer.isActive():
                 animation_timer.start()
@@ -203,23 +235,36 @@ def on_city_clicked(scatter, points):
 
 def animate():
     global active_planes
-    to_remove = []
     for anim in active_planes:
-        anim['distance'] += animation_speed
+        # Aggiorna la distanza in base alla direzione
+        anim['distance'] += animation_speed * anim.get('direction', 1)
+        
+        bounds = anim['item'].boundingRect()
+        scale = anim['item'].scale()
+        translation_value = (-bounds.width()*scale / 2, -bounds.height()*scale / 2)
+        # Se supera la lunghezza, inverti direzione
         if anim['distance'] >= anim['length']:
+            transform = QtGui.QTransform()
+            transform.rotate(anim['angle'] + 180)
+            transform.translate(*translation_value)
+            anim['item'].setTransform(transform)
+            
             anim['distance'] = anim['length']
+            anim['direction'] = -1  # torna indietro
+
+        elif anim['distance'] <= 0:
+            transform = QtGui.QTransform()
+            transform.rotate(anim['angle'])
+            transform.translate(*translation_value)
+            anim['item'].setTransform(transform)
+            
+            anim['distance'] = 0
+            anim['direction'] = 1   # torna avanti
+
         t = anim['distance'] / anim['length'] if anim['length'] != 0 else 1
         new_pos = interpolate_points(anim['start'], anim['end'], t)
         anim['item'].setPos(*new_pos)
 
-
-        if anim['distance'] >= anim['length']:
-            anim['item'].setVisible(False)
-            plot.removeItem(anim['item'])
-            to_remove.append(anim)
-
-    for rem in to_remove:
-        active_planes.remove(rem)
 
     if len(active_planes) == 0:
         animation_timer.stop()
