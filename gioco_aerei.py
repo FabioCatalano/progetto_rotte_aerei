@@ -3,296 +3,197 @@ from pyqtgraph.Qt import QtCore, QtWidgets, QtGui, QtSvg
 import numpy as np
 from PyQt5.QtWidgets import QInputDialog
 import random
+import sys
 
 
-app = pg.mkQApp()
+class AirplaneGame:
+    def __init__(self):
+        self.app = pg.mkQApp()
+        pg.setConfigOption('background', 'w')
+        pg.setConfigOption('foreground', 'k')
 
-pg.setConfigOption('background', 'w')
-pg.setConfigOption('foreground', 'k')
+        self.win = pg.GraphicsLayoutWidget(show=True, title='Gioco aerei volanti')
+        self.plot = self.win.addPlot()
+        self.plot.setAspectLocked(True)
 
-win = pg.GraphicsLayoutWidget(show = True, title='Gioco aerei volanti')
-plot = win.addPlot()
-plot.setAspectLocked(True)
+        self.all_cities = {
+            'A': (10, 20), 'B': (50, 80), 'C': (70, 40), 'D': (90, 90),
+            'E': (30, 60), 'F': (80, 20), 'G': (60, 10), 'H': (40, 70)
+        }
 
-# Lista di città “da aggiungere” (coordinate e nomi non ancora presenti)
-all_cities = {
-    'A': (10, 20),
-    'B': (50, 80),
-    'C': (70, 40),
-    'D': (90, 90),
-    'E': (30, 60),
-    'F': (80, 20),
-    'G': (60, 10),
-    'H': (40, 70)
-}
+        self.cities = {k: v for k, v in self.all_cities.items() if k in ['A', 'B', 'C']}
+        self.city_positions = list(self.cities.values())
 
-# Iniziamo con alcune città (per esempio solo A, B, C)
-cities = {k: v for k, v in all_cities.items() if k in ['A', 'B', 'C']}
-city_positions = list(cities.values())
+        self.city_scatter = pg.ScatterPlotItem(
+            pos=self.city_positions, size=15, brush=pg.mkBrush('dodgerblue'), pen=pg.mkPen('black')
+        )
+        self.city_scatter.setZValue(1)
+        self.plot.addItem(self.city_scatter)
 
-city_scatter = pg.ScatterPlotItem(
-    pos = city_positions,
-    size = 15,
-    brush = pg.mkBrush('dodgerblue'),
-    pen = pg.mkPen('black')
-)
-city_scatter.setZValue(1)
-plot.addItem(city_scatter)
+        self.connections = {city: [] for city in self.all_cities.keys()}
 
+        self.pen_dashed = pg.mkPen(color=(80, 80, 80), width=2, style=QtCore.Qt.DashLine)
+        self.lines = []
+        self.texts = []
 
-# Inizializziamo connections senza collegamenti
-connections = {city: [] for city in all_cities.keys()}
+        for name, (x, y) in self.cities.items():
+            text = pg.TextItem(name, anchor=(0.5, -0.5), color='black')
+            text.setPos(x, y)
+            text.setZValue(2)
+            self.plot.addItem(text)
+            self.texts.append(text)
 
-pen_dashed = pg.mkPen(color = (80, 80, 80), width = 2, style = QtCore.Qt.DashLine)
+        self.active_planes = []
+        self.animation_speed = 0.5
 
+        self.animation_timer = QtCore.QTimer()
+        self.animation_timer.setInterval(30)
+        self.animation_timer.timeout.connect(self.animate)
 
-lines = {}  # (city_name, dest_city) : line -> {(tuple): linea}
+        self.add_city_timer = QtCore.QTimer()
+        self.add_city_timer.timeout.connect(self.add_city)
+        self.add_city_timer.start(10000)
 
-texts = []
+        self.city_scatter.sigClicked.connect(self.on_city_clicked)
+        self.plot.scene().sigMouseClicked.connect(self.on_plot_clicked)
 
-#anchor posiziona rispetto a (x,y)
-for name, (x, y) in cities.items():
-    text = pg.TextItem(name, anchor = (0.5, -0.5), color='black')
-    text.setPos(x, y)
-    text.setZValue(2)
-    plot.addItem(text)
-    texts.append(text)
+    def add_city(self):
+        remaining = [k for k in self.all_cities if k not in self.cities]
+        if not remaining:
+            self.add_city_timer.stop()
+            return
 
-def connect_cities(c1, c2):
-    connections[c1].append(c2)
-    connections[c2].append(c1)
+        new_city = remaining[0]
+        new_pos = self.all_cities[new_city]
+        self.cities[new_city] = new_pos
+        self.city_positions = list(self.cities.values())
+        self.city_scatter.setData(pos=self.city_positions)
 
-def disconnect_cities(c1, c2):
-    connections[c1].remove(c2)
-    connections[c2].remove(c1)
+        text = pg.TextItem(new_city, anchor=(0.5, -0.5), color='black')
+        text.setPos(*new_pos)
+        self.plot.addItem(text)
+        self.texts.append(text)
 
+    def create_airplane_svg_item(self, svg_path, starting_point, size=5, angle=0):
+        item = QtSvg.QGraphicsSvgItem(svg_path)
+        item.setFlags(QtWidgets.QGraphicsItem.ItemClipsToShape)
+        item.setCacheMode(QtWidgets.QGraphicsItem.NoCache)
+        item.setZValue(3)
+        bounds = item.boundingRect()
+        scale = size / max(bounds.width(), bounds.height())
+        item.setScale(scale)
+        translation_value = (-bounds.width() * scale / 2, -bounds.height() * scale / 2)
+        transform = QtGui.QTransform()
+        transform.rotate(angle)
+        transform.translate(*translation_value)
+        item.setTransform(transform)
+        item.setPos(starting_point[0] - bounds.width() * scale / 2,
+                    starting_point[1] - bounds.height() * scale / 2)
+        item.setVisible(True)
+        return item
 
-# Timer per aggiungere città ogni 10 secondi
-def add_city():
-    global cities, city_positions, texts
+    def interpolate_points(self, p1, p2, t):
+        return (1 - t) * np.array(p1) + t * np.array(p2)
 
-    # Trova città non ancora aggiunte
-    remaining = [k for k in all_cities.keys() if k not in cities]
-    if not remaining:
-        # Nessuna città rimasta, ferma timer
-        add_city_timer.stop()
-        return
-
-    # Prendi una città a caso o in ordine
-    new_city = remaining[0]
-    new_pos = all_cities[new_city]
-
-    # Aggiungi alla mappa
-    cities[new_city] = new_pos
-    city_positions = list(cities.values())
-
-    # Aggiorna scatter
-    city_scatter.setData(pos=city_positions)
-
-    # Aggiungi testo della nuova città
-    text = pg.TextItem(new_city, anchor=(0.5, -0.5), color='black')
-    text.setPos(*new_pos)
-    plot.addItem(text)
-    texts.append(text)
-
-add_city_timer = QtCore.QTimer()
-add_city_timer.timeout.connect(add_city)
-add_city_timer.start(10000)  # 10 secondi
-
-
-def create_airplane_svg_item(svg_path, starting_point, size = 5, angle = 0,):
-    item = QtSvg.QGraphicsSvgItem(svg_path)
-    item.setFlags(QtWidgets.QGraphicsItem.ItemClipsToShape)
-    item.setCacheMode(QtWidgets.QGraphicsItem.NoCache)
-    item.setZValue(3)
-    bounds = item.boundingRect()
-    scale = size / max(bounds.width(), bounds.height())
-    item.setScale(scale)
-    translation_value = (-bounds.width()*scale / 2, -bounds.height()*scale / 2)
-    transform = QtGui.QTransform()
-    transform.rotate(angle)
-    transform.translate(*translation_value)
-    item.setTransform(transform)
-    x_start = starting_point[0] -bounds.width() * scale / 2
-    y_start = starting_point[1] -bounds.height() * scale / 2
-    item.setPos(x_start, y_start)
-    item.setVisible(True)
-    
-    return item
-
-active_planes = []
-
-animation_timer = QtCore.QTimer()
-animation_timer.setInterval(30)
-animation_speed = 0.5
-
-
-def interpolate_points(p1, p2, t):
-    return (1 - t) * np.array(p1) + t * np.array(p2)
-
-
-def on_city_clicked(scatter, points):
-    if points:
+    def on_city_clicked(self, scatter, points):
+        if not points:
+            return
         pt = points[0].pos()
         clicked_pos = (pt.x(), pt.y())
         try:
-            idx = city_positions.index(clicked_pos)
+            idx = self.city_positions.index(clicked_pos)
         except ValueError:
             return
 
+        city_name = list(self.cities.keys())[idx]
+        start = self.city_positions[idx]
 
-        city_name = list(cities.keys())[idx]
-        
-        
-        if len(connections[city_name]) == 0:
-            actions = ["Creare una linea di connessione"]
-        else:
-            actions = ["Far partire un aereo", "Creare una linea di connessione", "Eliminare una linea di connessione"]
-        
-        choice, ok = QInputDialog.getItem(
-            None,
-            f"Azioni per città {city_name}",
-            "Scegli un'azione:",
-            actions,
-            0,
-            False
-        )
+        options = ["Creare una linea di connessione"] if not self.connections[city_name] else ["Far partire un aereo", "Creare una linea di connessione", "Eliminare una linea di connessione"]
+        choice, ok = QInputDialog.getItem(None, f"Azioni per città {city_name}", "Scegli un'azione:", options, 0, False)
         if not ok:
             return
 
-        start = city_positions[idx]
-
         if choice == "Far partire un aereo":
-            next_city = random.choice(connections[city_name])
-            next_idx = list(cities.keys()).index(next_city)
-            end = city_positions[next_idx]
+            dest_city = random.choice(self.connections[city_name])
+            end = self.cities[dest_city]
             direction = np.array(end) - np.array(start)
             angle = np.degrees(np.arctan2(direction[1], direction[0])) + 90
             length = np.linalg.norm(direction)
-
-            plane = create_airplane_svg_item('airplane.svg', size=5, angle=angle, starting_point=start)
-            plot.addItem(plane)
-            
-            active_planes.append({
-                'item': plane,
-                'start': start,
-                'end': end,
-                'angle': angle,
-                'length': length,
-                'distance': 0,
-                'direction': 1,   # inizio volo in avanti
-                'base_scale': plane.scale()
-            })
-
-
-            if not animation_timer.isActive():
-                animation_timer.start()
+            plane = self.create_airplane_svg_item('airplane.svg', start, 5, angle)
+            self.plot.addItem(plane)
+            self.active_planes.append({'item': plane, 'start': start, 'end': end, 'angle': angle, 'length': length, 'distance': 0, 'direction': 1})
+            if not self.animation_timer.isActive():
+                self.animation_timer.start()
 
         elif choice == "Creare una linea di connessione":
-            dest_city, ok = QInputDialog.getItem(
-                None,
-                f"Scegli destinazione da {city_name}",
-                "Città di destinazione:",
-                [m for m in list(cities.keys()) if m != city_name and m not in connections[city_name]],
-                0,
-                False
-            )
-            if not ok or dest_city == city_name:
+            possible = [k for k in self.cities.keys() if k != city_name and k not in self.connections[city_name]]
+            if not possible:
                 return
-
-            end = cities[dest_city]
-            
-            connect_cities(city_name, dest_city)
-            print(connections)
-            
-            line = pg.PlotDataItem(
-                x=[start[0], end[0]],
-                y=[start[1], end[1]],
-                pen=pen_dashed
-            )
-            line.setZValue(0.5)
-            plot.addItem(line)
-            key = tuple(sorted([city_name, dest_city]))
-            lines[key] = line
-
-
-        elif choice == "Eliminare una linea di connessione":
-            if len(connections[city_name]) == 0:
-                return
-            dest_city, ok = QInputDialog.getItem(
-                None,
-                f"Scegli quale connessione eliminare da {city_name}",
-                "Città collegata:",
-                connections[city_name],
-                0,
-                False
-            )
+            dest_city, ok = QInputDialog.getItem(None, "Scegli destinazione", "Città di destinazione:", possible, 0, False)
             if not ok:
                 return
-            
-            disconnect_cities(city_name, dest_city)
-            print(connections)
+            end = self.cities[dest_city]
+            self.connections[city_name].append(dest_city)
+            self.connections[dest_city].append(city_name)
+            line = pg.PlotDataItem(x=[start[0], end[0]], y=[start[1], end[1]], pen=self.pen_dashed)
+            line.setZValue(0.5)
+            self.plot.addItem(line)
+            self.lines.append(line)
 
-            # Rimuove la linea grafica
-            key = tuple(sorted([city_name, dest_city]))
-            if key in lines:
-                plot.removeItem(lines[key])
-                del lines[key]
-                
-    if not animation_timer.isActive():
-        animation_timer.start()
+        elif choice == "Eliminare una linea di connessione":
+            if not self.connections[city_name]:
+                return
+            dest_city, ok = QInputDialog.getItem(None, "Scegli collegamento da eliminare", "Città collegata:", self.connections[city_name], 0, False)
+            if not ok:
+                return
+            self.connections[city_name].remove(dest_city)
+            self.connections[dest_city].remove(city_name)
+            for line in self.lines:
+                line_x, line_y = line.getData()
+                coords = [(line_x[0], line_y[0]), (line_x[1], line_y[1])]
+                if self.cities[city_name] in coords and self.cities[dest_city] in coords:
+                    self.plot.removeItem(line)
+                    self.lines.remove(line)
+                    break
+
+    def animate(self):
+        for plane in self.active_planes:
+            plane['distance'] += self.animation_speed * plane['direction']
+            if plane['distance'] >= plane['length'] or plane['distance'] <= 0:
+                plane['direction'] *= -1
+                transform = QtGui.QTransform()
+                transform.rotate(plane['angle'] + (180 if plane['direction'] == -1 else 0))
+                bounds = plane['item'].boundingRect()
+                scale = plane['item'].scale()
+                transform.translate(-bounds.width()*scale/2, -bounds.height()*scale/2)
+                plane['item'].setTransform(transform)
+                plane['distance'] = max(0, min(plane['distance'], plane['length']))
+            t = plane['distance'] / plane['length'] if plane['length'] else 1
+            new_pos = self.interpolate_points(plane['start'], plane['end'], t)
+            plane['item'].setPos(*new_pos)
+
+        if not self.active_planes:
+            self.animation_timer.stop()
+
+    def on_plot_clicked(self, event):
+        pos = self.plot.vb.mapSceneToView(event.scenePos())
+        points = self.city_scatter.pointsAt(pos)
+        if len(points) == 0:
+            return
+        if not self.city_scatter.pointsAt(pos):
+            pass
+    
+    def closeEvent(self, event):
+        # Ferma i timer in modo sicuro alla chiusura della finestra
+        self.animation_timer.stop()
+        self.add_city_timer.stop()
+        event.accept()  # Accetta l'evento di chiusura senza forzare l'uscita
 
 
 
-
-def animate():
-    global active_planes
-    for anim in active_planes:
-        # Aggiorna la distanza in base alla direzione
-        anim['distance'] += animation_speed * anim.get('direction', 1)
-        
-        bounds = anim['item'].boundingRect()
-        scale = anim['item'].scale()
-        translation_value = (-bounds.width()*scale / 2, -bounds.height()*scale / 2)
-        # Se supera la lunghezza, inverti direzione
-        if anim['distance'] >= anim['length']:
-            transform = QtGui.QTransform()
-            transform.rotate(anim['angle'] + 180)
-            transform.translate(*translation_value)
-            anim['item'].setTransform(transform)
-            
-            anim['distance'] = anim['length']
-            anim['direction'] = -1  # torna indietro
-
-        elif anim['distance'] <= 0:
-            transform = QtGui.QTransform()
-            transform.rotate(anim['angle'])
-            transform.translate(*translation_value)
-            anim['item'].setTransform(transform)
-            
-            anim['distance'] = 0
-            anim['direction'] = 1   # torna avanti
-
-        t = anim['distance'] / anim['length'] if anim['length'] != 0 else 1
-        new_pos = interpolate_points(anim['start'], anim['end'], t)
-        anim['item'].setPos(*new_pos)
-        
-        
-    # if len(active_planes) == 0:
-    #     animation_timer.stop()
-
-animation_timer.timeout.connect(animate)
-city_scatter.sigClicked.connect(on_city_clicked)
-
-def on_plot_clicked(event):
-    pos = plot.vb.mapSceneToView(event.scenePos())
-    clicked_points = city_scatter.pointsAt(pos)
-    if len(clicked_points) == 0:
-        pass
-
-plot.scene().sigMouseClicked.connect(on_plot_clicked)
-
-if __name__ == '__main__':
-    import sys
+if __name__ == "__main__":
+    game = AirplaneGame()
     if (sys.flags.interactive != 1) or not hasattr(QtCore, 'PYQT_VERSION'):
         QtWidgets.QApplication.instance().exec_()
+
+
