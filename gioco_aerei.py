@@ -40,7 +40,7 @@ class CityNetwork:
 
 class Airplane:
     def __init__(self, svg_path, start_pos, end_pos, parent, 
-                 size = 15, connection = None, capacity = 100):
+                 size = 15, connection = None, rotta = None, capacity = 100):
         self.parent = parent
         self.start = np.array(start_pos)
         self.end = np.array(end_pos)
@@ -49,7 +49,10 @@ class Airplane:
         self.distance = 0
         self.direction = 1
         self.connection = connection
-        self.capacity = capacity 
+        self.capacity = capacity
+        self.rotta = rotta
+
+
         
         direction_vec = self.end - self.start
         self.length = np.linalg.norm(direction_vec)
@@ -84,30 +87,42 @@ class Airplane:
             self.direction *= -1 #inverte direzione
             
             #aggiorna i passeggeri nelle città
-            end_city = self.connection[1]
-            start_city = self.connection[0]
+            end_city = self.rotta[1]
+            start_city = self.rotta[0]
             self.parent.network.active_cities[end_city]['pop'] += self.capacity
             self.parent.network.active_cities[start_city]['pop'] -= self.capacity
+
             
             self.update_transform()
             
-            self.parent.plot.removeItem(self.parent.texts[start_city])
-            self.parent.add_city_label(start_city, self.parent.network.active_cities[start_city])
-            self.parent.plot.removeItem(self.parent.texts[end_city])
-            self.parent.add_city_label(end_city, self.parent.network.active_cities[end_city])
+            self.parent.update_city_population_label(start_city)
+            self.parent.update_city_population_label(end_city)
+            
+            # self.parent.plot.removeItem(self.parent.texts[start_city])
+            # self.parent.add_city_label(start_city, self.parent.network.active_cities[start_city])
+            # self.parent.plot.removeItem(self.parent.texts[end_city])
+            # self.parent.add_city_label(end_city, self.parent.network.active_cities[end_city])
             
         elif self.distance <= 0:
             self.distance = 0
             self.direction *= -1  # Inverte la direzione
-    
+
             # Scarica passeggeri alla città di origine
-            end_city = self.connection[0]
-            start_city = self.connection[1]
+            end_city = self.rotta[0]
+            start_city = self.rotta[1]
             self.parent.network.active_cities[end_city]['pop'] += self.capacity
             self.parent.network.active_cities[start_city]['pop'] -= self.capacity
     
             self.update_transform()
+            
+            self.parent.update_city_population_label(start_city)
+            self.parent.update_city_population_label(end_city)
     
+            # self.parent.plot.removeItem(self.parent.texts[start_city])
+            # self.parent.add_city_label(start_city, self.parent.network.active_cities[start_city])
+            # self.parent.plot.removeItem(self.parent.texts[end_city])
+            # self.parent.add_city_label(end_city, self.parent.network.active_cities[end_city])
+            
         t = self.distance / self.length if self.length else 1
         new_pos = (1 - t) * self.start + t * self.end
         self.set_pos(new_pos)
@@ -128,6 +143,46 @@ class ClickableAirplaneItem(QtSvg.QGraphicsSvgItem):
 
     def mousePressEvent(self, event):
         self.clicked.emit(self)
+        event.accept()
+
+
+
+# class ClickableLine(QtCore.QObject, QtWidgets.QGraphicsLineItem):
+#     clicked = QtCore.pyqtSignal(object)  # emette se stessa quando cliccata
+
+#     def __init__(self, p1, p2, city1, city2, pen=None):
+#         QtCore.QObject.__init__(self)
+#         QtWidgets.QGraphicsLineItem.__init__(self)
+#         self.setLine(p1[0], p1[1], p2[0], p2[1])
+        
+#         self.city1 = city1
+#         self.city2 = city2
+#         self.setPen(pg.mkPen(color=(100, 100, 100), width=2))
+#         self.setZValue(0.5)
+#         self.setAcceptHoverEvents(True)
+#         self.setFlag(self.ItemIsSelectable, True)
+
+#     def mousePressEvent(self, event):
+#         self.clicked.emit(self)
+
+class ClickableLine:
+    def __init__(self, city1, city2, p1, p2, on_click_callback):
+        self.city1 = city1
+        self.city2 = city2
+        self.line_item = QtWidgets.QGraphicsLineItem(p1[0], p1[1], p2[0], p2[1])
+        self.line_item.setPen(pg.mkPen(color=(100, 100, 100), width=2))
+        self.line_item.setZValue(1)
+        self.line_item.setAcceptHoverEvents(True)
+
+        # Callback da richiamare al click
+        self.on_click_callback = on_click_callback
+
+        # Attacca evento di clic
+        self.line_item.mousePressEvent = self._on_mouse_press
+
+    def _on_mouse_press(self, event):
+        if callable(self.on_click_callback):
+            self.on_click_callback(self)
         event.accept()
 
 
@@ -202,7 +257,7 @@ class AirplaneGame:
         pop = city_info['pop']
         label = ""
         html_info = """<font size="3">
-                    {city_name}<br>Pop: {pop}
+                    {city_name}<br>Population: {pop}
                     </font>
         """.format(city_name = city_name, pop = pop)
         text = pg.TextItem(label, anchor=(0.4, 0.1), color = 'black', html = html_info)
@@ -210,6 +265,15 @@ class AirplaneGame:
         text.setZValue(2)
         self.plot.addItem(text)
         self.texts[city_name] = text
+    
+    def update_city_population_label(self, city_name):
+        if city_name in self.texts:
+            pop = self.network.active_cities[city_name]['pop']
+            html_info = f"""<font size="3">
+                            {city_name}<br>Population: {pop}
+                            </font>
+            """
+            self.texts[city_name].setHtml(html_info)
 
 
     def add_city(self):
@@ -231,16 +295,17 @@ class AirplaneGame:
             return
         start = self.network.active_cities[city_name]['pos']
         options = ["Creare una linea di connessione"] if not self.network.connections.get(city_name) else ["Far partire un aereo", "Creare una linea di connessione", "Eliminare una linea di connessione"]
-        choice, ok = QInputDialog.getItem(None, f"Azioni per città {city_name}", "Scegli un'azione:", options, 0, False)
+        choice, ok = QtWidgets.QInputDialog.getItem(None, f"Azioni per città {city_name}", "Scegli un'azione:", options, 0, False)
         if not ok:
             return
         if choice == "Far partire un aereo":
             dest_city = random.choice(self.network.connections[city_name])
             end = self.network.active_cities[dest_city]['pos']
             conn = tuple(sorted([city_name, dest_city]))
+            rotta_aereo = [city_name, dest_city]
             
             plane = Airplane('airplane.svg', start, end, size = self.plane_size,
-                             connection = conn, capacity = random.randint(20, 150),
+                             connection = conn, rotta = rotta_aereo, capacity = random.randint(20, 150),
                              parent = self)
             
             plane.item.clicked.connect(self.on_airplane_clicked)
@@ -256,20 +321,25 @@ class AirplaneGame:
             possible = [k for k in self.network.active_cities.keys() if k != city_name and k not in self.network.connections[city_name]]
             if not possible:
                 return
-            dest_city, ok = QInputDialog.getItem(None, "Scegli destinazione", "Città di destinazione:", possible, 0, False)
+            dest_city, ok = QtWidgets.QInputDialog.getItem(None, "Scegli destinazione", "Città di destinazione:", possible, 0, False)
             if not ok:
                 return
             end = self.network.active_cities[dest_city]['pos']
             self.network.connect(city_name, dest_city)
+            
             line = pg.PlotCurveItem(x=[start[0], end[0]], y=[start[1], end[1]],
                                     pen = self.pen_dashed)
             line.setZValue(0.5)
+            # line = ClickableLine(city_name, dest_city, start, end, 
+            #                      on_click_callback=self.on_connection_clicked)
             self.plot.addItem(line)
             self.lines.append(line)
+
+
         elif choice == "Eliminare una linea di connessione":
             if not self.network.connections[city_name]:
                 return
-            dest_city, ok = QInputDialog.getItem(None, "Scegli collegamento da eliminare", "Città collegata:", self.network.connections[city_name], 0, False)
+            dest_city, ok = QtWidgets.QInputDialog.getItem(None, "Scegli collegamento da eliminare", "Città collegata:", self.network.connections[city_name], 0, False)
             if not ok:
                 return
             self.network.disconnect(city_name, dest_city)
@@ -294,6 +364,7 @@ class AirplaneGame:
     
         # Crea etichetta con informazioni
         label = QtWidgets.QLabel(f"Passeggeri: {plane.capacity}")
+        plane.info_label = label  # salva il riferimento
         label.setStyleSheet("""
             background-color: white;
             border: 1px solid black;
@@ -313,13 +384,39 @@ class AirplaneGame:
     
         # Posiziona la finestra vicino all'aereo
         self.update_info_position(plane)
+    
+    
+    # def on_connection_clicked(self, clickable_line):
+    #     city1 = clickable_line.city1
+    #     city2 = clickable_line.city2
+    #     # apri qui il dialogo per aggiungere l'aereo
+    #     msg = f"Aggiungere un aereo sulla rotta {city1} ↔ {city2}?"
+    #     confirm = QtWidgets.QMessageBox.question(None, "Nuovo Aereo", msg)
+        
+    #     if confirm == QtWidgets.QMessageBox.Yes:
+    #         pos1 = self.network.active_cities[city1]['pos']
+    #         pos2 = self.network.active_cities[city2]['pos']
+    #         conn = tuple(sorted([city1, city2]))
+        
+    #         airplane = Airplane("airplane.svg", pos1, pos2, capacity=100, 
+    #                             connection=conn, parent = self)
+    #         self.plot.addItem(airplane.item)
+    #         self.active_planes.append(airplane)
+    
 
                 
     def update_info_position(self, plane):
         if hasattr(plane, 'info_widget') and plane.info_widget:
             x, y = plane.position
+            transform = QtGui.QTransform()
+            transform.scale(1, -1)  # 1 sull'asse X, -1 sull'asse Y → flip verticale
+
             # Posiziona leggermente sopra l’aereo
             plane.info_widget.setPos(x + 5, y + 5)
+            plane.info_widget.setTransform(transform)
+    
+
+
     
 
     def animate(self):
@@ -335,8 +432,17 @@ class AirplaneGame:
     def on_plot_clicked(self, event):
         pos = self.plot.vb.mapSceneToView(event.scenePos())
         points = self.city_scatter.pointsAt(pos)
+        
+        # Se non hai cliccato un aereo, rimuovi eventuali info_widget attivi
+        for plane in self.active_planes:
+            if hasattr(plane, 'info_widget') and plane.info_widget:
+                self.plot.removeItem(plane.info_widget)
+                plane.info_widget = None
+                
         if len(points) == 0:
             return
+
+
 
     def closeEvent(self, event):
         self.animation_timer.stop()
