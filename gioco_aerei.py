@@ -5,8 +5,9 @@ from PyQt5.QtWidgets import QInputDialog
 import random
 import sys
 
-# Fare in modo che la città di start e quella di end siano definibili. 
-# Al momento connection è unico, quindi A->B e B->A sono la stessa cosa
+# Nella documentazione è presente un modo più efficiente per cambiare i colori
+# Quando ci saranno più aerei. Il file è "ColorazioneAerei.docx"
+
 
 class CityNetwork:
     ''' Class that defines all the cities, the active cities and the current
@@ -40,7 +41,8 @@ class CityNetwork:
 
 class Airplane:
     def __init__(self, svg_path, start_pos, end_pos, parent, 
-                 size = 15, connection = None, rotta = None, capacity = 100):
+                 size = 15, connection = None, rotta = None, capacity = 100, 
+                 passengers = 0, color = 'black'):
         self.parent = parent
         self.start = np.array(start_pos)
         self.end = np.array(end_pos)
@@ -51,6 +53,11 @@ class Airplane:
         self.connection = connection
         self.capacity = capacity
         self.rotta = rotta
+        self.passengers = passengers
+        self.clicked = False
+        self.color = color
+        
+
 
 
         
@@ -63,6 +70,7 @@ class Airplane:
         self.item.setFlags(QtWidgets.QGraphicsItem.ItemClipsToShape)
         self.item.setCacheMode(QtWidgets.QGraphicsItem.NoCache)
         self.item.setZValue(3)
+        
 
         bounds = self.item.boundingRect()
         scale = self.size / max(bounds.width(), bounds.height())
@@ -74,54 +82,67 @@ class Airplane:
         transform.translate(*translation_value)
         self.item.setTransform(transform)
         self.set_pos(self.position)
+    
+    def update_color(self):
+        
+        plane_load = self.passengers/self.capacity
+        color_index = min(int(plane_load*len(self.parent.airplane_colors)), 
+                          len(self.parent.airplane_colors) - 1)
+        self.color = self.parent.airplane_colors[color_index]
+        effect = QtWidgets.QGraphicsColorizeEffect()
+        effect.setColor(QtGui.QColor(self.color))
+        self.item.setGraphicsEffect(effect)
+                    
 
     def set_pos(self, pos):
         self.position = pos
         self.item.setPos(pos[0], pos[1])
         
     def update(self, speed = 0.5):
-        self.distance += speed * self.direction
+        self.distance += speed * self.direction        
         
         if self.distance >= self.length:
             self.distance = self.length
             self.direction *= -1 #inverte direzione
+            self.update_transform()
             
             #aggiorna i passeggeri nelle città
             end_city = self.rotta[1]
             start_city = self.rotta[0]
-            self.parent.network.active_cities[end_city]['pop'] += self.capacity
-            self.parent.network.active_cities[start_city]['pop'] -= self.capacity
+ 
+            self.parent.network.active_cities[end_city]['pop'] += self.passengers
+            self.passengers = random.randint(0, self.capacity)
+            self.parent.network.active_cities[end_city]['pop'] -= self.passengers
+            self.update_color()
+            print(f'Rotta da {end_city} a {start_city} -> Passeggeri: {self.passengers}')
 
-            
-            self.update_transform()
-            
             self.parent.update_city_population_label(start_city)
             self.parent.update_city_population_label(end_city)
+            if self.clicked == True:
+                self.parent.on_airplane_clicked(self)
             
-            # self.parent.plot.removeItem(self.parent.texts[start_city])
-            # self.parent.add_city_label(start_city, self.parent.network.active_cities[start_city])
-            # self.parent.plot.removeItem(self.parent.texts[end_city])
-            # self.parent.add_city_label(end_city, self.parent.network.active_cities[end_city])
+
             
         elif self.distance <= 0:
             self.distance = 0
             self.direction *= -1  # Inverte la direzione
+            self.update_transform()
 
             # Scarica passeggeri alla città di origine
             end_city = self.rotta[0]
             start_city = self.rotta[1]
-            self.parent.network.active_cities[end_city]['pop'] += self.capacity
-            self.parent.network.active_cities[start_city]['pop'] -= self.capacity
+            self.parent.network.active_cities[end_city]['pop'] += self.passengers
+            self.passengers = random.randint(0, self.capacity)
+            self.parent.network.active_cities[end_city]['pop'] -= self.passengers
+            self.update_color()
+            print(f'Rotta da {end_city} a {start_city} -> Passeggeri: {self.passengers}')
     
-            self.update_transform()
-            
             self.parent.update_city_population_label(start_city)
             self.parent.update_city_population_label(end_city)
+            if self.clicked == True:
+                self.parent.on_airplane_clicked(self)
     
-            # self.parent.plot.removeItem(self.parent.texts[start_city])
-            # self.parent.add_city_label(start_city, self.parent.network.active_cities[start_city])
-            # self.parent.plot.removeItem(self.parent.texts[end_city])
-            # self.parent.add_city_label(end_city, self.parent.network.active_cities[end_city])
+
             
         t = self.distance / self.length if self.length else 1
         new_pos = (1 - t) * self.start + t * self.end
@@ -195,6 +216,8 @@ class AirplaneGame:
         
         self.plane_size = 50
         self.city_size = 30
+        self.airplane_colors = ['#024E1B', '#006B3E', '#FFE733', '#FFAA1C',
+                                '#FF8C01', '#ED2938']
 
         self.win = pg.GraphicsLayoutWidget(show=True, title='Gioco aerei volanti')
         self.plot = self.win.addPlot()
@@ -305,15 +328,19 @@ class AirplaneGame:
             rotta_aereo = [city_name, dest_city]
             
             plane = Airplane('airplane.svg', start, end, size = self.plane_size,
-                             connection = conn, rotta = rotta_aereo, capacity = random.randint(20, 150),
+                             connection = conn, rotta = rotta_aereo,
                              parent = self)
+            plane.passengers = random.randint(0, plane.capacity)
+            plane.update_color()
             
+            self.network.active_cities[city_name]['pop'] -= plane.passengers
+            self.update_city_population_label(city_name)
             plane.item.clicked.connect(self.on_airplane_clicked)
             self.plot.addItem(plane.item)
             # Collegamento click sull’aereo alla funzione principale
-            plane.item.mousePressEvent = lambda event, p=plane: self.on_airplane_clicked(p)
+            plane.item.mousePressEvent = lambda event, p = plane: self.on_airplane_clicked(p)
             self.active_planes.append(plane)
-            print(f"Aereo da {city_name} a {dest_city}, capacità: {plane.capacity} passeggeri")
+            print(f"Aereo da {city_name} a {dest_city}, capacità: {plane.capacity}, passeggeri: {plane.passengers}")
             if not self.animation_timer.isActive():
                 self.animation_timer.start()
                 
@@ -357,13 +384,14 @@ class AirplaneGame:
                 self.active_planes.remove(plane)
     
     def on_airplane_clicked(self, plane):
+        plane.clicked = True
         # Chiudi eventuale widget aperto prima
         if hasattr(self, 'current_info_widget') and self.current_info_widget:
             self.plot.removeItem(self.current_info_widget)
             self.current_info_widget = None
     
         # Crea etichetta con informazioni
-        label = QtWidgets.QLabel(f"Passeggeri: {plane.capacity}")
+        label = QtWidgets.QLabel(f"Passeggeri: {plane.passengers}")
         plane.info_label = label  # salva il riferimento
         label.setStyleSheet("""
             background-color: white;
@@ -435,6 +463,7 @@ class AirplaneGame:
         
         # Se non hai cliccato un aereo, rimuovi eventuali info_widget attivi
         for plane in self.active_planes:
+            plane.clicked = False
             if hasattr(plane, 'info_widget') and plane.info_widget:
                 self.plot.removeItem(plane.info_widget)
                 plane.info_widget = None
