@@ -42,7 +42,7 @@ class CityNetwork:
 class Airplane:
     def __init__(self, svg_path, start_pos, end_pos, parent, 
                  size = 15, connection = None, rotta = None, capacity = 100, 
-                 passengers = 0, color = 'black'):
+                 passengers = {}, color = 'black'):
         self.parent = parent
         self.start = np.array(start_pos)
         self.end = np.array(end_pos)
@@ -85,7 +85,7 @@ class Airplane:
     
     def update_color(self):
         
-        plane_load = self.passengers/self.capacity
+        plane_load = sum(self.passengers.values())/self.capacity
         color_index = min(int(plane_load*len(self.parent.airplane_colors)), 
                           len(self.parent.airplane_colors) - 1)
         self.color = self.parent.airplane_colors[color_index]
@@ -109,10 +109,11 @@ class Airplane:
             #aggiorna i passeggeri nelle città
             end_city = self.rotta[1]
             start_city = self.rotta[0]
- 
-            self.parent.network.active_cities[end_city]['pop'] += self.passengers
-            self.passengers = random.randint(0, self.capacity)
-            self.parent.network.active_cities[end_city]['pop'] -= self.passengers
+            
+            self.parent.network.active_cities[end_city]['pop'] += sum(self.passengers.values())
+            # self.passengers = random.randint(0, self.capacity)
+            self.passengers = {'A': 50}
+            self.parent.network.active_cities[end_city]['pop'] -= sum(self.passengers.values())
             self.update_color()
             print(f'Rotta da {end_city} a {start_city} -> Passeggeri: {self.passengers}')
 
@@ -131,9 +132,10 @@ class Airplane:
             # Scarica passeggeri alla città di origine
             end_city = self.rotta[0]
             start_city = self.rotta[1]
-            self.parent.network.active_cities[end_city]['pop'] += self.passengers
-            self.passengers = random.randint(0, self.capacity)
-            self.parent.network.active_cities[end_city]['pop'] -= self.passengers
+            self.parent.network.active_cities[end_city]['pop'] += sum(self.passengers.values())
+            # self.passengers = random.randint(0, self.capacity)
+            self.passengers = {'C': 50}
+            self.parent.network.active_cities[end_city]['pop'] -= sum(self.passengers.values())
             self.update_color()
             print(f'Rotta da {end_city} a {start_city} -> Passeggeri: {self.passengers}')
     
@@ -224,14 +226,14 @@ class AirplaneGame:
         self.plot.setAspectLocked(True)
 
         self.all_cities = {
-            'A': {'pos': (100, 200), 'pop': 5000},
-            'B': {'pos': (500, 800), 'pop': 7000},
-            'C': {'pos': (700, 400), 'pop': 3000},
-            'D': {'pos': (900, 900), 'pop': 10000},
-            'E': {'pos': (300, 600), 'pop': 4500},
-            'F': {'pos': (800, 200), 'pop': 3500},
-            'G': {'pos': (600, 100), 'pop': 2500},
-            'H': {'pos': (400, 700), 'pop': 6000}
+            'A': {'pos': (100, 200), 'pop': 5000, 'pas': {'B': 10, 'C': 20}},
+            'B': {'pos': (500, 800), 'pop': 7000, 'pas': {'A': 80, 'C': 50}},
+            'C': {'pos': (700, 400), 'pop': 3000, 'pas': {'A': 50}},
+            'D': {'pos': (900, 900), 'pop': 9000, 'pas': {'A': 50}},
+            'E': {'pos': (300, 600), 'pop': 4500, 'pas': {'A': 50}},
+            'F': {'pos': (800, 200), 'pop': 3500, 'pas': {'A': 50}},
+            'G': {'pos': (600, 100), 'pop': 2500, 'pas': {'A': 50}},
+            'H': {'pos': (400, 700), 'pop': 6000, 'pas': {'A': 50}},
         }
         
         self.active_city_label = []
@@ -240,8 +242,8 @@ class AirplaneGame:
         self.network = CityNetwork(self.all_cities)
         for city in ['A', 'B', 'C']:
             self.network.add_city(city)
-            
-
+        
+        
         self.city_scatter = pg.ScatterPlotItem(
             pos = [m['pos'] for m in self.network.active_cities.values()],
             data = list(self.network.active_cities.keys()),
@@ -309,6 +311,24 @@ class AirplaneGame:
             new_city_info = self.network.active_cities[new_city]
             self.city_scatter.addPoints(pos = [new_city_info['pos']], data = [new_city])
             self.add_city_label(new_city, new_city_info)
+    
+    def load_plane(self, plane):
+        start_city, end_city = plane.rotta
+        places_left = plane.capacity - sum(plane.passengers.values())
+        city_pas = self.network.active_cities[start_city]['pas']
+        ordered_city_pas = dict(sorted(city_pas.items(), key = lambda item:item[1], reverse = True))
+        while (places_left > 0) and (ordered_city_pas != {}):
+            first_city = list(ordered_city_pas.keys())[0] #first city in ordered city -> most passengers
+            n_pas_first = ordered_city_pas[first_city]
+            if n_pas_first < places_left:
+                plane.passengers[first_city] = n_pas_first
+                ordered_city_pas.pop(first_city)
+                places_left = plane.capacity - sum(plane.passengers.values())
+            else:
+                plane.passengers[first_city] = places_left
+                ordered_city_pas[first_city] = ordered_city_pas[first_city] - places_left
+                places_left = plane.capacity - sum(plane.passengers.values())
+
 
     def on_city_clicked(self, scatter, points):
         if not points:
@@ -334,10 +354,12 @@ class AirplaneGame:
             plane = Airplane('airplane.svg', start, end, size = self.plane_size,
                              connection = conn, rotta = rotta_aereo,
                              parent = self)
-            plane.passengers = random.randint(0, plane.capacity)
+            # plane.passengers = random.randint(0, plane.capacity)
+            self.load_plane(plane)
+            print(plane.passengers)
             plane.update_color()
             
-            self.network.active_cities[city_name]['pop'] -= plane.passengers
+            self.network.active_cities[city_name]['pop'] -= sum(plane.passengers.values())
             self.update_city_population_label(city_name)
             plane.item.clicked.connect(self.on_airplane_clicked)
             self.plot.addItem(plane.item)
