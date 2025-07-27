@@ -235,7 +235,7 @@ class AirplaneGame:
         }
         
         self.active_city_label = []
-
+        
         
         self.network = CityNetwork(self.all_cities)
         for city in ['A', 'B', 'C']:
@@ -322,7 +322,11 @@ class AirplaneGame:
         if not ok:
             return
         if choice == "Far partire un aereo":
-            dest_city = random.choice(self.network.connections[city_name])
+            possible = self.network.connections[city_name] #cities connected with city_name
+            dest_city, ok =  QtWidgets.QInputDialog.getItem(None, "Scegli destinazione", "Città di destinazione:", possible, 0, False)
+            if not ok:
+                return 
+            
             end = self.network.active_cities[dest_city]['pos']
             conn = tuple(sorted([city_name, dest_city]))
             rotta_aereo = [city_name, dest_city]
